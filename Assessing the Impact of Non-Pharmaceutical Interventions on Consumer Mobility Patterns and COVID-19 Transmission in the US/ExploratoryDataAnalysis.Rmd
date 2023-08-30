@@ -1,0 +1,831 @@
+---
+title: "Assessing the Impact of NPIs on Consumer Mobility Patterns and COVID-19 Transmission in the US"
+author: "Joseph Zuccarelli, Laura Seaman, Kevin Rader"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+
+---
+
+```{r setup, include=FALSE}
+# Define necessary libraries
+library(tidyr)
+library(lubridate)
+library(table1)
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(factoextra)
+library(ggfortify)
+library(zoo)
+library(maps)
+library(sf)
+library(tigris)
+library(mapdata)
+library(ggrepel)
+library(reshape2)
+```
+
+In the following markdown document, we carry out all exploratory data analysis.
+
+## Exploratory Data Analysis
+
+First, let's read in our two datasets.
+``` {r}
+# Read in data
+MA_data <- read.csv("/Users/jqz0816/Documents/MDPI/data/MA_data.csv")
+MI_data <- read.csv("/Users/jqz0816/Documents/MDPI/data/MI_data.csv")
+```
+
+Next, let's properly define the type of each feature.
+```{r}
+# Define features with proper types
+MA_data$date <- as.Date(MA_data$date)
+MA_data$day <- as.factor(MA_data$day)
+MA_data$weekend <- as.factor(MA_data$weekend)
+MA_data$emergency <- as.factor(MA_data$emergency)
+MI_data$date <- as.Date(MI_data$date)
+MI_data$day <- as.factor(MI_data$day)
+MI_data$weekend <- as.factor(MI_data$weekend)
+MI_data$emergency <- as.factor(MI_data$emergency)
+```
+
+Finally, let's explore our data!
+
+#### Non-Pharmaceutical Intervention Data
+
+**Figure: Non-Pharmaceutical Intervention Stringency By Date**
+
+**a.) Massachusetts**
+```{r fig.align="center",warning=FALSE,message=FALSE}
+# Plot: NPI by Date (MA Jan - May 2020)
+MA_data_plot <- MA_data %>% 
+  filter(uuid=="0007561724B170454D13B2F6CE227C3D77F116951F5A75BC258349DD18AD0733") %>%
+  select(date,emergency,work_closing,gather_restrict,stay_home_reqs)
+MA_data_plot$emergency <- as.numeric(as.character(MA_data_plot$emergency))
+MA_data_plot <- melt(MA_data_plot,id="date")
+MA_data_plot %>%
+  ggplot(aes(x=date,y=value,color=variable)) +
+  geom_line() +
+  scale_colour_discrete(labels=c("National Emergency", "Workplace Closures", 
+                                 "Gathering Restrictions", 
+                                 "Stay-at-Home Requirements")) +
+  labs(x="Date",y="Stringency Index",title="NPI Stringency by Date (MA)",color="NPI")
+```
+
+**b.) Michigan**
+```{r fig.align="center",warning=FALSE,message=FALSE}
+# Plot: NPI by Date (MI Jan - May 2020)
+MI_data_plot <- MI_data %>% 
+  filter(uuid=="000919F1AAA2A62098038034B268628BCAE1157EBC627042B45BFD7AF38A22C6") %>%
+  select(date,emergency,work_closing,gather_restrict,stay_home_reqs)
+MI_data_plot$emergency <- as.numeric(as.character(MI_data_plot$emergency))
+MI_data_plot <- melt(MI_data_plot,id="date")
+MI_data_plot %>%
+  ggplot(aes(x=date,y=value,color=variable)) +
+  geom_line() +
+  scale_colour_discrete(labels=c("National Emergency", "Workplace Closures", 
+                                 "Gathering Restrictions", 
+                                 "Stay-at-Home Requirements")) +
+  labs(x="Date",y="Stringency Index",title="NPI Stringency by Date (MI)",color="NPI")
+```
+
+**Table: Proportion of days by NPI Stringency Jan 1st - May 31st (MA & MI)**
+```{r}
+# NPI Table (MA)
+MA_data_table <- MA_data %>% 
+  filter(uuid=="0007561724B170454D13B2F6CE227C3D77F116951F5A75BC258349DD18AD0733") %>%
+  select(emergency,work_closing,gather_restrict,stay_home_reqs)  
+
+# NPI Table (MI)
+MI_data_table <- MI_data %>% 
+  filter(uuid=="000919F1AAA2A62098038034B268628BCAE1157EBC627042B45BFD7AF38A22C6") %>%
+  select(emergency,work_closing,gather_restrict,stay_home_reqs)
+
+# Bind NPI Tables
+MA_data_table$state <- as.factor("MA")
+MI_data_table$state <- as.factor("MI")
+data_table <- rbind(MA_data_table,MI_data_table)
+```
+
+```{r}
+# Contingency Table (Workplace Closure)
+test_work <- chisq.test(data_table$state,data_table$work_closing)
+test_work$observed
+```
+
+```{r}
+# Chi-Square Test (Workplace Closure)
+test_work
+```
+
+```{r}
+# Contingency Table (Stay-at-Home Requirements)
+test_home <- chisq.test(data_table$state,data_table$stay_home_reqs)
+test_home$observed
+```
+
+```{r}
+# Chi-Square Test (Stay-at-Home Requirements)
+test_home
+```
+
+```{r}
+# Contingency Table (Gathering Restrictions)
+test_gather <- chisq.test(data_table$state,data_table$gather_restrict)
+test_gather$observed
+```
+
+```{r}
+# Chi-Square Test (Gathering Restrictions)
+test_gather
+```
+
+## Point-of-Sale Transaction Data
+
+**Figure: State Maps**
+
+**a.) Massachusetts**
+```{r fig.align="center",warning=FALSE,message=FALSE,results='hide'}
+# Define area of interest (MA)
+ma_state <- states(cb = TRUE, class = "sf") %>% 
+  filter(NAME == "Massachusetts")
+ma_county <- counties(state = "MA", cb = TRUE, class = "sf")
+ma_study_counties <- ma_county %>% 
+  filter(NAME =='Suffolk') %>% 
+  mutate(fill_color = 'coral')
+```
+```{r fig.align="center",warning=FALSE}
+# Plot: State Map (MA)
+ma_study_counties %>% 
+  ggplot() +
+  geom_sf(aes(fill = fill_color)) +
+  geom_sf(data = ma_state, fill = NA) +
+  geom_label_repel(data=ma_study_counties %>% filter(NAME=='Suffolk'),
+    aes(label = "Suffolk", geometry = geometry),
+    stat = "sf_coordinates",
+    min.segment.length = 0,
+    label.size = 1
+    ) +
+  scale_fill_identity() +   
+  labs(x="Longitude",y='Latitude',title='State Map') 
+```
+
+**b.) Michigan**
+```{r fig.align="center",warning=FALSE,message=FALSE,results='hide'}
+# Define area of interest (MI)
+mi_state <- states(cb = TRUE, class = "sf") %>% 
+  filter(NAME == "Michigan")
+mi_county <- counties(state = "MI", cb = TRUE, class = "sf")
+mi_study_counties <- mi_county %>% 
+  filter(NAME =="Washtenaw") %>% 
+  mutate(fill_color = 'coral')
+```
+```{r fig.align="center",warning=FALSE}
+# Plot: State Map (MI)
+mi_study_counties %>% 
+  ggplot() +
+  geom_sf(aes(fill = fill_color)) +
+  geom_sf(data = mi_state, fill = NA) +
+  coord_sf(xlim = c(-90.25,-82.5),ylim = c(41.75,47.25))+
+  geom_label_repel(data=mi_study_counties %>% filter(NAME=='Washtenaw'),
+    aes(label = 'Washtenaw', geometry = geometry),
+    stat = "sf_coordinates",
+    min.segment.length = 0,
+    label.size = 1
+    ) +
+  scale_fill_identity() +   
+  labs(x="Longitude",y='Latitude',title='State Map') 
+```
+
+```{r cache=TRUE}
+# Create MA df with idv features
+MA_data_idv_pre <- MA_data %>%
+  filter(emergency==0) %>%
+  group_by(uuid) %>%
+  summarise(avg_trans_day_pre = mean(num_transactions),
+            avg_business_day_pre = mean(num_unique_businesses),
+            avg_zips_day_pre = mean(num_unique_zips),
+            avg_morning_day_pre = mean(num_morning),
+            avg_afternoon_day_pre = mean(num_afternoon),
+            avg_evening_day_pre = mean(num_evening),
+            avg_night_day_pre = mean(num_night),
+            avg_grocery_day_pre = mean(num_grocery),
+            avg_convenience_day_pre = mean(num_convenience),
+            avg_restaurant_day_pre = mean(num_restaurants))
+MA_data_idv_post <- MA_data %>%
+  filter(emergency==1) %>%
+  group_by(uuid) %>%
+  summarise(avg_trans_day_post = mean(num_transactions),
+            avg_business_day_post = mean(num_unique_businesses),
+            avg_zips_day_post = mean(num_unique_zips),
+            avg_morning_day_post = mean(num_morning),
+            avg_afternoon_day_post = mean(num_afternoon),
+            avg_evening_day_post = mean(num_evening),
+            avg_night_day_post = mean(num_night),
+            avg_grocery_day_post = mean(num_grocery),
+            avg_convenience_day_post = mean(num_convenience),
+            avg_restaurant_day_post = mean(num_restaurants))
+MA_data_idv <- merge(MA_data_idv_pre,MA_data_idv_post,by='uuid')
+MA_data_idv <- MA_data_idv %>%
+  mutate(trans_pct_chg = ((avg_trans_day_post-avg_trans_day_pre)/avg_trans_day_pre)*100,
+         business_pct_chg = ((avg_business_day_post-avg_business_day_pre)/avg_business_day_pre)*100,
+         zips_pct_chg = ((avg_zips_day_post-avg_zips_day_pre)/avg_zips_day_pre)*100) %>%
+  arrange(trans_pct_chg)
+feat_order <- c("uuid","avg_trans_day_pre","avg_trans_day_post","trans_pct_chg", 
+                "avg_business_day_pre","avg_business_day_post","business_pct_chg",
+                "avg_zips_day_pre","avg_zips_day_post","zips_pct_chg",
+                "avg_morning_day_pre","avg_morning_day_post",
+                "avg_afternoon_day_pre","avg_afternoon_day_post",
+                "avg_evening_day_pre","avg_evening_day_post",
+                "avg_night_day_pre","avg_night_day_post",
+                "avg_grocery_day_pre","avg_grocery_day_post",
+                "avg_convenience_day_pre","avg_convenience_day_post",
+                "avg_restaurant_day_pre","avg_restaurant_day_post")
+MA_data_idv <- MA_data_idv[,feat_order]
+
+# Create MI df with idv features
+MI_data_idv_pre <- MI_data %>%
+  filter(emergency==0) %>%
+  group_by(uuid) %>%
+  summarise(avg_trans_day_pre = mean(num_transactions),
+            avg_business_day_pre = mean(num_unique_businesses),
+            avg_zips_day_pre = mean(num_unique_zips),
+            avg_morning_day_pre = mean(num_morning),
+            avg_afternoon_day_pre = mean(num_afternoon),
+            avg_evening_day_pre = mean(num_evening),
+            avg_night_day_pre = mean(num_night),
+            avg_grocery_day_pre = mean(num_grocery),
+            avg_convenience_day_pre = mean(num_convenience),
+            avg_restaurant_day_pre = mean(num_restaurants))
+MI_data_idv_post <- MI_data %>%
+  filter(emergency==1) %>%
+  group_by(uuid) %>%
+  summarise(avg_trans_day_post = mean(num_transactions),
+            avg_business_day_post = mean(num_unique_businesses),
+            avg_zips_day_post = mean(num_unique_zips),
+            avg_morning_day_post = mean(num_morning),
+            avg_afternoon_day_post = mean(num_afternoon),
+            avg_evening_day_post = mean(num_evening),
+            avg_night_day_post = mean(num_night),
+            avg_grocery_day_post = mean(num_grocery),
+            avg_convenience_day_post = mean(num_convenience),
+            avg_restaurant_day_post = mean(num_restaurants))
+MI_data_idv <- merge(MI_data_idv_pre,MI_data_idv_post,by='uuid')
+MI_data_idv <- MI_data_idv %>%
+  mutate(trans_pct_chg = ((avg_trans_day_post-avg_trans_day_pre)/avg_trans_day_pre)*100,
+         business_pct_chg = ((avg_business_day_post-avg_business_day_pre)/avg_business_day_pre)*100,
+         zips_pct_chg = ((avg_zips_day_post-avg_zips_day_pre)/avg_zips_day_pre)*100) %>%
+  arrange(trans_pct_chg)
+feat_order <- c("uuid","avg_trans_day_pre","avg_trans_day_post","trans_pct_chg", 
+                "avg_business_day_pre","avg_business_day_post","business_pct_chg",
+                "avg_zips_day_pre","avg_zips_day_post","zips_pct_chg",
+                "avg_morning_day_pre","avg_morning_day_post",
+                "avg_afternoon_day_pre","avg_afternoon_day_post",
+                "avg_evening_day_pre","avg_evening_day_post",
+                "avg_night_day_pre","avg_night_day_post",
+                "avg_grocery_day_pre","avg_grocery_day_post",
+                "avg_convenience_day_pre","avg_convenience_day_post",
+                "avg_restaurant_day_pre","avg_restaurant_day_post")
+MI_data_idv <- MI_data_idv[,feat_order]
+```
+
+**Table: Daily Individual Consumer Behavior Before vs. During National Emergency**
+
+**a.) Massachusetts**
+```{r cache=TRUE}
+# View Top 6
+head(MA_data_idv,6)
+```
+
+**b.) Michigan**
+```{r cache=TRUE}
+# View Top 6
+head(MI_data_idv,6)
+```
+
+
+```{r fig.align="center",warning=FALSE,message=FALSE,cache=TRUE}
+# Create plotting idv df (MA)
+MA_data_idv_pre$emergency <- "Before"
+MA_data_idv_post$emergency <-  "During"
+colnames(MA_data_idv_pre) <- c("uuid","avg_trans_day", 
+                "avg_business_day",
+                "avg_zips_day",
+                "avg_morning_day",
+                "avg_afternoon_day",
+                "avg_evening_day",
+                "avg_night_day",
+                "avg_grocery_day",
+                "avg_convenience_day",
+                "avg_restaurant_day","emergency")
+colnames(MA_data_idv_post) <- c("uuid","avg_trans_day", 
+                "avg_business_day",
+                "avg_zips_day",
+                "avg_morning_day",
+                "avg_afternoon_day",
+                "avg_evening_day",
+                "avg_night_day",
+                "avg_grocery_day",
+                "avg_convenience_day",
+                "avg_restaurant_day","emergency")
+MA_data_idv_plot <- rbind(MA_data_idv_pre,MA_data_idv_post)
+MA_data_idv_plot$emergency <- factor(MA_data_idv_plot$emergency,levels=c('Before','During'))
+
+# Create plotting idv df (MI)
+MI_data_idv_pre$emergency <- "Before"
+MI_data_idv_post$emergency <- "During"
+colnames(MI_data_idv_pre) <- c("uuid","avg_trans_day", 
+                "avg_business_day",
+                "avg_zips_day",
+                "avg_morning_day",
+                "avg_afternoon_day",
+                "avg_evening_day",
+                "avg_night_day",
+                "avg_grocery_day",
+                "avg_convenience_day",
+                "avg_restaurant_day","emergency")
+colnames(MI_data_idv_post) <- c("uuid","avg_trans_day", 
+                "avg_business_day",
+                "avg_zips_day",
+                "avg_morning_day",
+                "avg_afternoon_day",
+                "avg_evening_day",
+                "avg_night_day",
+                "avg_grocery_day",
+                "avg_convenience_day",
+                "avg_restaurant_day","emergency")
+MI_data_idv_plot <- rbind(MI_data_idv_pre,MI_data_idv_post)
+MI_data_idv_plot$emergency <- factor(MI_data_idv_plot$emergency,levels=c('Before','During'))
+```
+
+**Figure 13: Distribution of Individual Average Daily Transactions (Before vs. During National Emergency)**
+
+**a.) Massachusetts**
+```{r fig.align="center",warning=FALSE,message=FALSE,cache=TRUE}
+# Plot: Distribution of Individual Average Daily Transactions (MA)
+MA_data_idv_plot %>%
+  ggplot(aes(x=avg_trans_day)) +
+  geom_histogram() +
+  facet_wrap(~emergency)+
+  labs(x='Average Number of Daily Transactions',y='Frequency',title='Distribution of Individual Average Daily Transactions')
+```
+
+**b.) Michigan**
+```{r fig.align="center",warning=FALSE,message=FALSE,cache=TRUE}
+# Plot: Distribution of Individual Average Daily Transactions (MI)
+MI_data_idv_plot %>%
+  ggplot(aes(x=avg_trans_day)) +
+  geom_histogram() +
+  facet_wrap(~emergency)+
+  labs(x='Average Number of Daily Transactions',y='Frequency',title='Distribution of Individual Average Daily Transactions')
+```
+
+**Figure 14: Distribution of Individual Average Daily Businesses (Before vs. During National Emergency)**
+
+**a.) Massachusetts**
+```{r fig.align="center",warning=FALSE,message=FALSE,cache=TRUE}
+# Plot: Distribution of Individual Average Daily Businesses (MA)
+MA_data_idv_plot %>%
+  ggplot(aes(x=avg_business_day)) +
+  geom_histogram() +
+  facet_wrap(~emergency)+
+  labs(x='Average Number of Daily Businesses',y='Frequency',title='Distribution of Individual Average Daily Businesses')
+```
+
+**b.) Michigan**
+```{r fig.align="center",warning=FALSE,message=FALSE,cache=TRUE}
+# Plot: Distribution of Individual Average Daily Businesses (MI)
+MI_data_idv_plot %>%
+  ggplot(aes(x=avg_business_day)) +
+  geom_histogram() +
+  facet_wrap(~emergency)+
+  labs(x='Average Number of Daily Businesses',y='Frequency',title='Distribution of Individual Average Daily Businesses')
+```
+
+**Figure 15: Distribution of Individual Average Daily Zip Codes (Before vs. During National Emergency)**
+
+**a.) Massachusetts**
+```{r fig.align="center",warning=FALSE,message=FALSE,cache=TRUE}
+# Plot: Distribution of Individual Average Daily Zip Codes (MA)
+MA_data_idv_plot %>%
+  ggplot(aes(x=avg_zips_day)) +
+  geom_histogram() +
+  facet_wrap(~emergency)+
+  labs(x='Average Number of Daily Zip Codes',y='Frequency',title='Distribution of Individual Average Daily Zip Codes')
+```
+
+**b.) Michigan**
+```{r fig.align="center",warning=FALSE,message=FALSE,cache=TRUE}
+# Plot: Distribution of Individual Average Daily Zip Codes (MI)
+MI_data_idv_plot %>%
+  ggplot(aes(x=avg_zips_day)) +
+  geom_histogram() +
+  facet_wrap(~emergency)+
+  labs(x='Average Number of Daily Zip Codes',y='Frequency',title='Distribution of Individual Average Daily Zip Codes')
+```
+
+```{r cache=TRUE}
+# Create df with sample level features (MA)
+MA_data_sample <- MA_data %>%
+  group_by(date) %>%
+  summarise(avg_trans = mean(num_transactions),
+            avg_businesses = mean(num_unique_businesses),
+            avg_zips = mean(num_unique_zips),
+            avg_morning = mean(num_morning),
+            avg_afternoon = mean(num_afternoon),
+            avg_evening = mean(num_evening),
+            avg_night = mean(num_night),
+            avg_grocery = mean(num_grocery),
+            avg_convenience = mean(num_convenience),
+            avg_health = mean(num_health),
+            avg_hotel = mean(num_hotels),
+            avg_restaurant = mean(num_restaurants))
+
+
+# Mutate rolling averages (time series)
+MA_data_sample <- MA_data_sample %>%
+            mutate(avg_trans_7day = rollmean(avg_trans, k=7, fill=NA, align='right'),
+                   avg_businesses_7day = rollmean(avg_businesses, k=7, fill=NA, align='right'),
+                   avg_zips_7day = rollmean(avg_zips, k=7, fill=NA, align='right'),
+                   avg_morning_7day = rollmean(avg_morning, k=7, fill=NA, align='right'),
+                   avg_afternoon_7day = rollmean(avg_afternoon, k=7, fill=NA, align='right'),
+                   avg_evening_7day = rollmean(avg_evening, k=7, fill=NA, align='right'),
+                   avg_night_7day = rollmean(avg_night, k=7, fill=NA, align='right'),
+                   avg_grocery_7day = rollmean(avg_grocery, k=7, fill=NA, align='right'),
+                   avg_convenience_7day = rollmean(avg_convenience, k=7, fill=NA, align='right'),
+                   avg_health_7day = rollmean(avg_health, k=7, fill=NA, align='right'),
+                   avg_hotel_7day = rollmean(avg_hotel, k=7, fill=NA, align='right'),
+                   avg_restaurant_7day = rollmean(avg_restaurant, k=7, fill=NA, align='right'))
+
+# Mutate day features
+MA_data_sample$day <- wday(MA_data_sample$date,label = TRUE)
+MA_data_sample$weekend <- ifelse(MA_data_sample$day %in% c("Sat", "Sun"), 1, 0)
+MA_data_sample$emergency <- ifelse(MA_data_sample$date >= '2020-03-13', "During", "Before")
+MA_data_sample$emergency <- as.factor(MA_data_sample$emergency)
+MA_data_sample$emergency <- factor(MA_data_sample$emergency,levels = c('Before','During'))
+
+# Create df with sample level features (MI)
+MI_data_sample <- MI_data %>%
+  group_by(date) %>%
+  summarise(avg_trans = mean(num_transactions),
+            avg_businesses = mean(num_unique_businesses),
+            avg_zips = mean(num_unique_zips),
+            avg_morning = mean(num_morning),
+            avg_afternoon = mean(num_afternoon),
+            avg_evening = mean(num_evening),
+            avg_night = mean(num_night),
+            avg_grocery = mean(num_grocery),
+            avg_convenience = mean(num_convenience),
+            avg_health = mean(num_health),
+            avg_hotel = mean(num_hotels),
+            avg_restaurant = mean(num_restaurants))
+
+
+# Mutate rolling averages (time series)
+MI_data_sample <- MI_data_sample %>%
+            mutate(avg_trans_7day = rollmean(avg_trans, k=7, fill=NA, align='right'),
+                   avg_businesses_7day = rollmean(avg_businesses, k=7, fill=NA, align='right'),
+                   avg_zips_7day = rollmean(avg_zips, k=7, fill=NA, align='right'),
+                   avg_morning_7day = rollmean(avg_morning, k=7, fill=NA, align='right'),
+                   avg_afternoon_7day = rollmean(avg_afternoon, k=7, fill=NA, align='right'),
+                   avg_evening_7day = rollmean(avg_evening, k=7, fill=NA, align='right'),
+                   avg_night_7day = rollmean(avg_night, k=7, fill=NA, align='right'),
+                   avg_grocery_7day = rollmean(avg_grocery, k=7, fill=NA, align='right'),
+                   avg_convenience_7day = rollmean(avg_convenience, k=7, fill=NA, align='right'),
+                   avg_health_7day = rollmean(avg_health, k=7, fill=NA, align='right'),
+                   avg_hotel_7day = rollmean(avg_hotel, k=7, fill=NA, align='right'),
+                   avg_restaurant_7day = rollmean(avg_restaurant, k=7, fill=NA, align='right'))
+
+# Mutate day features
+MI_data_sample$day <- wday(MI_data_sample$date,label = TRUE)
+MI_data_sample$weekend <- ifelse(MI_data_sample$day %in% c("Sat", "Sun"), 1, 0)
+MI_data_sample$emergency <- ifelse(MI_data_sample$date >= '2020-03-13', "During", "Before")
+MI_data_sample$emergency <- as.factor(MI_data_sample$emergency)
+MI_data_sample$emergency <- factor(MI_data_sample$emergency,levels = c('Before','During'))
+
+# Bind DFs
+MA_data_sample$state <- "Boston, MA"
+MI_data_sample$state <- "Ann Arbor, MI"
+data_sample <- rbind(MA_data_sample,MI_data_sample)
+data_sample$state <- factor(data_sample$state, levels = c('Boston, MA',
+                                                          'Ann Arbor, MI'))
+```
+
+**Figure: Average Individual Transactions by Date**
+```{r fig.align="center",warning=FALSE,message=FALSE,cache=TRUE}
+# Plot: Individual Average Transactions by Date
+emergency <- as.Date('2020-03-13')
+data_sample %>%
+  ggplot(aes(x=date,y=avg_trans_7day,color=state)) +
+  geom_line() +
+  geom_text(aes(x=ymd("2020-03-13"),y=(7.6),label='NATIONAL'),color='red')+
+  geom_text(aes(x=ymd("2020-03-13"),y=(7.4),label='EMERGENCY'),color='red')+
+  annotate(geom = "vline",
+           x = c(emergency),
+           xintercept = c(emergency),
+           linetype = c("dashed"),
+           color = c("red")) +
+  labs(x='Date',y='Transactions', color="Sample",
+       title='Average Individual Transactions by Date')
+```
+
+**Figure: Average Individual Businesses by Date**
+```{r fig.align="center",warning=FALSE,message=FALSE,cache=TRUE}
+# Plot: Sample Average Daily Businesses by Date
+emergency <- as.Date('2020-03-13')
+data_sample %>%
+  ggplot(aes(x=date,y=avg_businesses_7day,color=state)) +
+  geom_line() +
+  geom_text(aes(x=ymd("2020-03-13"),y=(4.6),label='NATIONAL'),color='red')+
+  geom_text(aes(x=ymd("2020-03-13"),y=(4.45),label='EMERGENCY'),color='red')+
+  annotate(geom = "vline",
+           x = c(emergency),
+           xintercept = c(emergency),
+           linetype = c("dashed"),
+           color = c("red")) +
+  labs(x='Date',y='Businesses', color="Sample",
+       title='Average Individual Businesses by Date')
+```
+
+**Figure: Average Daily Zip Codes by Date**
+
+```{r fig.align="center",warning=FALSE,message=FALSE,cache=TRUE}
+# Plot: Sample Average Daily Zip Codes by Date
+emergency <- as.Date('2020-03-13')
+data_sample %>%
+  ggplot(aes(x=date,y=avg_zips_7day,color=state)) +
+  geom_line() +
+  geom_text(aes(x=ymd("2020-03-13"),y=(2.03),label='NATIONAL'),color='red')+
+  geom_text(aes(x=ymd("2020-03-13"),y=(1.97),label='EMERGENCY'),color='red')+
+  annotate(geom = "vline",
+           x = c(emergency),
+           xintercept = c(emergency),
+           linetype = c("dashed"),
+           color = c("red")) +
+  labs(x='Date',y='Zip Codes', color="Sample",
+       title='Average Individual Zip Codes by Date')
+```
+
+**Figure: Average Individual Transactions by Business Type Over Time**
+
+**a.) Massachusetts**
+```{r fig.align="center",warning=FALSE,message=FALSE}
+# Plot: Average Individual Transactions by Business Type Over Time (MA)
+MA_data_plot <- MA_data_sample %>% 
+  select(date,avg_grocery_7day,avg_convenience_7day,avg_restaurant_7day,avg_health_7day,avg_hotel_7day)
+MA_data_plot <- melt(MA_data_plot,id="date")
+MA_data_plot %>%
+  ggplot(aes(x=date,y=value,color=variable)) +
+  geom_line() +
+  geom_text(aes(x=ymd('2020-03-13'),y=(0.62),label='NATIONAL'),color='red')+
+  geom_text(aes(x=ymd('2020-03-13'),y=(0.57),label='EMERGENCY'),color='red')+
+  annotate(geom = "vline",
+           x = c(emergency),
+           xintercept = c(emergency),
+           linetype = c("dashed"),
+           color = c("red")) +
+  scale_colour_discrete(labels=c("Grocery", "Convenience", "Restaurant", "Health", "Hotel")) +
+  labs(x="Date",y="Transactions",title="Average Individual Transactions by Business Type Over Time",color="Business Type")
+```
+
+**b.) Michigan**
+```{r fig.align="center",warning=FALSE,message=FALSE}
+# Plot: Average Individual Transactions by Business Type Over Time (MI)
+MI_data_plot <- MI_data_sample %>% 
+  select(date,avg_grocery_7day,avg_convenience_7day,avg_restaurant_7day,avg_health_7day,avg_hotel_7day)
+MI_data_plot <- melt(MI_data_plot,id="date")
+MI_data_plot %>%
+  ggplot(aes(x=date,y=value,color=variable)) +
+  geom_line() +
+  geom_text(aes(x=ymd('2020-03-13'),y=(0.77),label='NATIONAL'),color='red')+
+  geom_text(aes(x=ymd('2020-03-13'),y=(0.71),label='EMERGENCY'),color='red')+
+  annotate(geom = "vline",
+           x = c(emergency),
+           xintercept = c(emergency),
+           linetype = c("dashed"),
+           color = c("red")) +
+  scale_colour_discrete(labels=c("Grocery", "Convenience", "Restaurant", "Health", "Hotel")) +
+  labs(x="Date",y="Transactions",title="Average Individual Transactions by Business Type Over Time",color="Business Type")
+```
+
+**Figure: Average Individual Transactions by Time of Day Over Time**
+
+**a.) Massachusetts**
+```{r fig.align="center",warning=FALSE,message=FALSE}
+# Plot: Average Daily Transactions by Time of Day Across Time (MA)
+MA_data_plot <- MA_data_sample %>% 
+  select(date,avg_morning_7day,avg_afternoon_7day,avg_evening_7day,avg_night_7day)
+MA_data_plot <- melt(MA_data_plot,id="date")
+MA_data_plot %>%
+  ggplot(aes(x=date,y=value,color=variable)) +
+  geom_line() +
+  geom_text(aes(x=ymd('2020-03-13'),y=(2.1),label='NATIONAL'),color='red')+
+  geom_text(aes(x=ymd('2020-03-13'),y=(1.9),label='EMERGENCY'),color='red')+
+  annotate(geom = "vline",
+           x = c(emergency),
+           xintercept = c(emergency),
+           linetype = c("dashed"),
+           color = c("red")) +
+  scale_colour_discrete(labels=c("Morning","Afternoon","Evening","Night")) +
+  labs(x="Date",y="Transactions",title="Average Individual Transactions by Time of Day Over Time",color="Time of Day")
+```
+
+**b.) Michigan**
+```{r fig.align="center",warning=FALSE,message=FALSE}
+# Plot: Average Daily Transactions by Time of Day Across Time (MI)
+MI_data_plot <- MI_data_sample %>% 
+  select(date,avg_morning_7day,avg_afternoon_7day,avg_evening_7day,avg_night_7day)
+MI_data_plot <- melt(MI_data_plot,id="date")
+MI_data_plot %>%
+  ggplot(aes(x=date,y=value,color=variable)) +
+  geom_line() +
+  geom_text(aes(x=ymd('2020-03-13'),y=(2.1),label='NATIONAL'),color='red')+
+  geom_text(aes(x=ymd('2020-03-13'),y=(1.9),label='EMERGENCY'),color='red')+
+  annotate(geom = "vline",
+           x = c(emergency),
+           xintercept = c(emergency),
+           linetype = c("dashed"),
+           color = c("red")) +
+  scale_colour_discrete(labels=c("Morning","Afternoon","Evening","Night")) +
+  labs(x="Date",y="Transactions",title="Average Individual Transactions by Time of Day Over Time",color="Time of Day")
+```
+
+**Figure: Distribution of Average Individual Daily Transactions by Day of the Week**
+
+**a.) Massachusetts**
+```{r fig.align="center",warning=FALSE,cache=TRUE}
+# Plot: Average Individual Daily Transactions by Day of Week (MA)
+MA_data_sample %>%
+  ggplot(aes(x=day,y=avg_trans)) +
+  geom_boxplot() +
+  facet_wrap(~emergency) +
+  labs(x="Day",y="Transactions",title="Average Individual Daily Transactions by Day of the Week")
+```
+
+**b.) Michigan**
+```{r fig.align="center",warning=FALSE,cache=TRUE}
+# Plot: Average Individual Daily Transactions by Day of Week (MI)
+MI_data_sample %>%
+  ggplot(aes(x=day,y=avg_trans)) +
+  geom_boxplot() +
+  facet_wrap(~emergency) +
+  labs(x="Day",y="Transactions",title="Average Individual Daily Transactions by Day of the Week")
+```
+
+## COVID-19 Case and Testing Data
+
+**Figure: COVID-19 Case Rate by Date**
+```{r fig.align="center",warning=FALSE,message=FALSE}
+# Plot: Daily COVID-19 Case Rate (per 100k population)
+MA_data_plot <- MA_data %>% 
+  filter(uuid=="0007561724B170454D13B2F6CE227C3D77F116951F5A75BC258349DD18AD0733") %>%
+  mutate(avg_case_7day = rollmean(case_rate, k=7, fill=NA, align='right')) %>%
+  filter(date >= "2020-03-01")
+MI_data_plot <- MI_data %>% 
+  filter(uuid=="000919F1AAA2A62098038034B268628BCAE1157EBC627042B45BFD7AF38A22C6") %>%
+  mutate(avg_case_7day = rollmean(case_rate, k=7, fill=NA, align='right')) %>%
+  filter(date >= "2020-03-01")
+MA_data_plot$state <- "Suffolk, MA"
+MI_data_plot$state <- "Washtenaw, MI"
+data_plot <- rbind(MA_data_plot,MI_data_plot)
+data_plot %>%
+  ggplot(aes(x=date,y=avg_case_7day,color=state)) +
+  geom_line() +
+  geom_text(aes(x=ymd('2020-03-13'),y=(31.5),label='NATIONAL'),color='red')+
+  geom_text(aes(x=ymd('2020-03-13'),y=(28.5),label='EMERGENCY'),color='red')+
+  annotate(geom = "vline",
+           x = c(emergency),
+           xintercept = c(emergency),
+           linetype = c("dashed"),
+           color = c("red")) +
+  labs(x='Date',y='COVID-19 Case Rate (per 100k population)', color="County",
+       title='COVID-19 Confirmed Case Rate by Date')
+```
+
+
+**Figure: COVID-19 Test Rate by Date**
+
+**a.) Massachusetts**
+```{r fig.align="center",warning=FALSE,message=FALSE}
+# Plot: Daily COVID-19 Testing Rate (per 100k population) MA
+MA_data_plot <- MA_data %>% 
+  filter(uuid=="0007561724B170454D13B2F6CE227C3D77F116951F5A75BC258349DD18AD0733") %>%
+  mutate(avg_test_7day = rollmean(test_rate, k=7, fill=NA, align='right')) %>%
+  filter(date >= "2020-03-01")
+MA_data_plot %>%
+  ggplot(aes(x=date,y=avg_test_7day)) +
+  geom_line() +
+  geom_text(aes(x=ymd('2020-03-13'),y=(105),label='NATIONAL'),color='red')+
+  geom_text(aes(x=ymd('2020-03-13'),y=(95),label='EMERGENCY'),color='red')+
+  annotate(geom = "vline",
+           x = c(emergency),
+           xintercept = c(emergency),
+           linetype = c("dashed"),
+           color = c("red")) +
+  labs(x="Date",y="COVID-19 Test Rate (per 100k population)",title="COVID-19 Test Rate by Date")
+```
+
+**b.) Michigan**
+```{r fig.align="center",warning=FALSE,message=FALSE}
+# Plot: Daily COVID-19 Testing Rate (per 100k population) Washtenaw MI
+MI_data_plot <- MI_data %>% 
+  filter(uuid=="000919F1AAA2A62098038034B268628BCAE1157EBC627042B45BFD7AF38A22C6") %>%
+  mutate(avg_test_7day = rollmean(test_rate, k=7, fill=NA, align='right')) %>%
+  filter(date >= "2020-03-01")
+MI_data_plot %>%
+  ggplot(aes(x=date,y=avg_test_7day)) +
+  geom_line() +
+  geom_text(aes(x=ymd('2020-03-13'),y=(79),label='NATIONAL'),color='red')+
+  geom_text(aes(x=ymd('2020-03-13'),y=(71),label='EMERGENCY'),color='red')+
+  annotate(geom = "vline",
+           x = c(emergency),
+           xintercept = c(emergency),
+           linetype = c("dashed"),
+           color = c("red")) +
+  labs(x="Date",y="COVID-19 Test Rate (per 100k population)",title="COVID-19 Test Rate by Date")
+```
+
+**Figure: Daily COVID-19 Case Rate by Day of the Week**
+
+**a.) Massachusetts**
+```{r fig.align="center",warning=FALSE,cache=TRUE}
+# Plot: COVID-19 Case Rate (per 100k population) by Day of the Week (MA)
+MA_data$day <- factor(MA_data$day,levels=c('Sun','Mon','Tue','Wed','Thu','Fri','Sat'))
+MA_data %>%
+  filter(uuid=="0007561724B170454D13B2F6CE227C3D77F116951F5A75BC258349DD18AD0733") %>%
+  filter(date >= "2020-03-13") %>%
+  ggplot(aes(x=day,y=case_rate)) +
+  geom_boxplot() +
+  labs(x="Day",y="COVID-19 Case Rate (per 100k population)",title="Daily COVID-19 Case Rate by Day of the Week")
+```
+
+**b.) Michigan**
+```{r fig.align="center",warning=FALSE,cache=TRUE}
+# Plot: COVID-19 Case Rate (per 100k population) by Day of the Week (MI)
+MI_data$day <- factor(MI_data$day,levels=c('Sun','Mon','Tue','Wed','Thu','Fri','Sat'))
+MI_data %>%
+  filter(uuid=="000919F1AAA2A62098038034B268628BCAE1157EBC627042B45BFD7AF38A22C6") %>%
+  filter(date >= "2020-03-13") %>%
+  ggplot(aes(x=day,y=case_rate)) +
+  geom_boxplot() +
+  labs(x="Day",y="COVID-19 Case Rate (per 100k population)",title="Daily COVID-19 Case Rate by Day of the Week")
+```
+
+**Figure: Daily COVID-19 Test Rate by Day of the Week**
+
+**a.) Massachusetts**
+```{r fig.align="center",warning=FALSE,cache=TRUE}
+# Plot: COVID-19 Testing Rate (per 100k population) by Day of the Week (MA)
+MA_data %>%
+  filter(uuid=="0007561724B170454D13B2F6CE227C3D77F116951F5A75BC258349DD18AD0733") %>%
+  filter(date >= "2020-03-13") %>%
+  ggplot(aes(x=day,y=test_rate)) +
+  geom_boxplot() +
+  labs(x="Day",y="COVID-19 Test Rate (per 100k population)",title="Daily COVID-19 Test Rate by Day of the Week")
+```
+
+**b.) Michigan**
+```{r fig.align="center",warning=FALSE,cache=TRUE}
+# Plot: COVID-19 Testing Rate (per 100k population) by Day of the Week (MI)
+MI_data %>%
+  filter(uuid=="000919F1AAA2A62098038034B268628BCAE1157EBC627042B45BFD7AF38A22C6") %>%
+  filter(date >= "2020-03-13") %>%
+  ggplot(aes(x=day,y=test_rate)) +
+  geom_boxplot() +
+  labs(x="Day",y="COVID-19 Test Rate (per 100k population)",title="Daily COVID-19 Test Rate by Day of the Week")
+```
+
+**Table: NPIs, Transaction and COVID-19 Before/During National Emergency**
+
+**a.) Massachusetts**
+```{r cache=TRUE}
+# Summarize MA dataset (Before vs. During National Emergency)
+MA_data$work_closing <- as.factor(MA_data$work_closing)
+MA_data$gather_restrict <- as.factor(MA_data$gather_restrict)
+MA_data$stay_home_reqs <- as.factor(MA_data$stay_home_reqs)
+table1(~work_closing + gather_restrict + stay_home_reqs + num_transactions 
+       + num_unique_businesses + num_unique_zips
+       + num_morning + num_afternoon + num_evening + num_night 
+       + num_grocery + num_convenience
+       + num_hotels + num_health + num_restaurants 
+       + case_rate + test_rate
+       | emergency,
+       data=MA_data)
+```
+
+**a.) Michigan**
+```{r cache=TRUE}
+# Summarize MI dataset (Before vs. During National Emergency)
+MI_data$work_closing <- as.factor(MI_data$work_closing)
+MI_data$gather_restrict <- as.factor(MI_data$gather_restrict)
+MI_data$stay_home_reqs <- as.factor(MI_data$stay_home_reqs)
+table1(~work_closing + gather_restrict + stay_home_reqs + num_transactions 
+       + num_unique_businesses + num_unique_zips
+       + num_morning + num_afternoon + num_evening + num_night 
+       + num_grocery + num_convenience
+       + num_hotels + num_health + num_restaurants 
+       + case_rate + test_rate
+       | emergency,
+       data=MI_data)
+```
