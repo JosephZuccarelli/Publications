@@ -1,0 +1,289 @@
+---
+title: "Assessing the Impact of NPIs on Consumer Mobility Patterns and COVID-19 Transmission in the US"
+author: "Joseph Zuccarelli, Laura Seaman, Kevin Rader"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+
+---
+
+```{r setup, include=FALSE}
+# Define necessary libraries
+library(tidyr)
+library(lubridate)
+library(table1)
+library(knitr)
+library(dplyr)
+library(lme4)
+library(ggplot2)
+library(cowplot)
+library(scales)
+library(reshape2)
+library(broom.mixed)
+library(zoo)
+library(afex)
+library(nlme)
+```
+
+In the following markdown document, we carry out all COVID-19 modeling using linear mixed effects models. 
+
+## COVID-19 Modeling
+
+First, we must read in our two datasets.
+```{r}
+# Read in data sets
+MA_data <- read.csv("/Users/jqz0816/Documents/MDPI/Data/MA_data.csv")
+MI_data <- read.csv("/Users/jqz0816/Documents/MDPI/Data/MI_data.csv")
+
+# Format date/indicator features properly
+MI_data$date <- as.Date(MI_data$date)
+MA_data$date <- as.Date(MA_data$date)
+MI_data$date_factor <- as.factor(MI_data$date)
+MA_data$date_factor <- as.factor(MA_data$date)
+MA_data$work_closing <- as.factor(MA_data$work_closing)
+MA_data$gather_restrict <- as.factor(MA_data$gather_restrict)
+MA_data$stay_home_reqs <- as.factor(MA_data$stay_home_reqs)
+MI_data$work_closing <- as.factor(MI_data$work_closing)
+MI_data$gather_restrict <- as.factor(MI_data$gather_restrict)
+MI_data$stay_home_reqs <- as.factor(MI_data$stay_home_reqs)
+
+# Group data by date
+MA_data_sample <- MA_data %>%
+  group_by(date) %>%
+  summarise(num_transactions_tot = sum(num_transactions),
+            num_businesses_tot = sum(num_unique_businesses),
+            num_zips_tot = sum(num_unique_zips),
+            num_morning_tot = sum(num_morning),
+            num_afternoon_tot = sum(num_afternoon),
+            num_evening_tot = sum(num_evening),
+            num_night_tot = sum(num_night),
+            num_grocery_tot = sum(num_grocery),
+            num_convenience_tot = sum(num_convenience),
+            num_health_tot = sum(num_health),
+            num_hotel_tot = sum(num_hotels),
+            num_restaurant_tot = sum(num_restaurants))
+MI_data_sample <- MI_data %>%
+  group_by(date) %>%
+  summarise(num_transactions_tot = sum(num_transactions),
+            num_businesses_tot = sum(num_unique_businesses),
+            num_zips_tot = sum(num_unique_zips),
+            num_morning_tot = sum(num_morning),
+            num_afternoon_tot = sum(num_afternoon),
+            num_evening_tot = sum(num_evening),
+            num_night_tot = sum(num_night),
+            num_grocery_tot = sum(num_grocery),
+            num_convenience_tot = sum(num_convenience),
+            num_health_tot = sum(num_health),
+            num_hotel_tot = sum(num_hotels),
+            num_restaurant_tot = sum(num_restaurants))
+
+# Mutate additional sample-level features
+MA_data_idv <- MA_data %>% 
+  filter(uuid=="0007561724B170454D13B2F6CE227C3D77F116951F5A75BC258349DD18AD0733") %>%
+  select(day,weekend,emergency,work_closing,gather_restrict,stay_home_reqs,
+         case_count,case_rate,test_count,test_rate,date_factor) 
+MI_data_idv <- MI_data %>% 
+  filter(uuid=="000919F1AAA2A62098038034B268628BCAE1157EBC627042B45BFD7AF38A22C6") %>%
+  select(day,weekend,emergency,work_closing,gather_restrict,stay_home_reqs,
+         case_count,case_rate,test_count,test_rate,date_factor) 
+MA_data_sample <- cbind(MA_data_sample,MA_data_idv)
+MI_data_sample <- cbind(MI_data_sample,MI_data_idv)
+MA_data_sample$state <- as.factor('Boston, MA')
+MI_data_sample$state <- as.factor('Ann Arbor, MI')
+```
+
+Now, let's mutate the primary two features required for modeling: COVID-19 case growth rates and lagged delta transactions.
+```{r}
+# Create exp growth rate features
+MA_data_sample <- MA_data_sample %>%
+  mutate(case_growth_rate = 100*(log(case_count+1) - log(lag(case_count+1))))
+MI_data_sample <- MI_data_sample %>%
+  mutate(case_growth_rate = 100*(log(case_count+1) - log(lag(case_count+1))))
+
+# Calculate pre-pandemic baseline transaction counts
+MA_baseline <- MA_data_sample %>% 
+  filter(date < "2020-03-01") %>%
+  group_by(day) %>%
+  summarise(baseline_transactions = median(num_transactions_tot))
+MI_baseline <- MI_data_sample %>% 
+  filter(date < "2020-03-01") %>%
+  group_by(day) %>%
+  summarise(baseline_transactions = median(num_transactions_tot))
+
+# Merge baseline transaction feature
+MA_data_sample <- merge(MA_data_sample,MA_baseline,by='day') %>%
+  arrange(date) %>%
+  mutate(delta_transactions = 100*((num_transactions_tot-baseline_transactions)/baseline_transactions))
+MI_data_sample <- merge(MI_data_sample,MI_baseline,by='day') %>%
+  arrange(date) %>%
+  mutate(delta_transactions = 100*((num_transactions_tot-baseline_transactions)/baseline_transactions))
+data_sample_plot <- rbind(MI_data_sample,MA_data_sample)
+data_sample_plot$state <- factor(data_sample_plot$state, levels = c('Boston, MA',
+                                                          'Ann Arbor, MI'))
+
+# Mutate lagged transaction features
+MA_data_emergency <- MA_data_sample %>%
+  mutate(delta_trans_lag18 = lag(delta_transactions, n = 18),
+         delta_trans_lag16 = lag(delta_transactions, n = 16),
+         delta_trans_lag14 = lag(delta_transactions, n = 14),
+         delta_trans_lag12 = lag(delta_transactions, n = 12),
+         delta_trans_lag10 = lag(delta_transactions, n = 10),
+         delta_trans_lag8 = lag(delta_transactions, n = 8),
+         delta_trans_lag6 = lag(delta_transactions, n = 6)) %>%
+  filter(emergency==1)
+MI_data_emergency <- MI_data_sample %>%
+  mutate(delta_trans_lag18 = lag(delta_transactions, n = 18),
+         delta_trans_lag16 = lag(delta_transactions, n = 16),
+         delta_trans_lag14 = lag(delta_transactions, n = 14),
+         delta_trans_lag12 = lag(delta_transactions, n = 12),
+         delta_trans_lag10 = lag(delta_transactions, n = 10),
+         delta_trans_lag8 = lag(delta_transactions, n = 8),
+         delta_trans_lag6 = lag(delta_transactions, n = 6)) %>%
+  filter(emergency==1)
+
+# Combine state DFs
+data_emergency <- rbind(MA_data_emergency,MI_data_emergency)
+```
+
+Prior to performing any modeling, it is necessary to visualize the distributions of our response variables.
+```{r fig.align="center",fig.width = 10,warning=FALSE}
+# Histogram: Distribution of Case Growth Rate (MA)
+MA_plot <- MA_data_emergency %>%
+  ggplot(aes(x=case_growth_rate)) +
+  geom_histogram()+
+  labs(x="Case Growth Rate",y="Count",title="Distribution of Case Growth Rate (MA)") 
+
+# Histogram: Distribution of Case Growth Rate (MA)
+MI_plot <- MI_data_emergency %>%
+  ggplot(aes(x=case_growth_rate)) +
+  geom_histogram()+
+  labs(x="Case Growth Rate",y="Count",title="Distribution of Case Growth Rate (MI)") 
+
+# Subplots
+plot_grid(MA_plot,MI_plot)
+```
+Note that for both samples the response variable appears to be normally distributed, suggesting that linear models are appropriate.
+
+Let's also visualize our primary explanatory variable, $\Delta$ transactions.
+```{r fig.align="center",warning=FALSE,message=FALSE,cache=TRUE}
+# Plot: Sample Average Daily Businesses by Date
+emergency <- as.Date('2020-03-13')
+data_sample_plot %>%
+  mutate(avg_delta_trans = rollmean(delta_transactions, k=7, fill=NA, align='right')) %>%
+  filter(date >= '2020-03-01') %>%
+  ggplot(aes(x=date,y=avg_delta_trans,color=state)) +
+  geom_line() +
+  geom_text(aes(x=ymd("2020-03-13"),y=(-14),label='NATIONAL'),color='red')+
+  geom_text(aes(x=ymd("2020-03-13"),y=(-18),label='EMERGENCY'),color='red')+
+  annotate(geom = "vline",
+           x = c(emergency),
+           xintercept = c(emergency),
+           linetype = c("dashed"),
+           color = c("red")) +
+  geom_hline(yintercept = 0, linetype="dashed") +
+  labs(x='Date',y='\u0394 Transactions (% Chg vs. Pre-Pandemic Baseline)', color="Sample",
+       title='\u0394 Transactions by Date')
+```
+Finally, let's begin modeling. Formally, our COVID-19 models are defined as follows:
+
+\begin{equation}
+   case \: growth \: rate_{ij} = \beta_0 + \beta_{1} \Delta transactions_{ijk} + \beta_{2} test \: rate_{ij} + \beta_{3} weekend_{i} + \gamma_{0j} .    
+\end{equation}
+
+The response variable, $case \: growth \: rate_{ij}$, denotes the confirmed COVID-19 case growth rate observed on date $i$ for county $j$. The explanatory variable of interest, $\Delta transactions_{ijk}$, represents the $k$-day lagged percentage of change in each sample's daily total POS transaction count compared to baseline. We controlled for the state-level COVID-19 testing rate (per 100,000 population) and seasonal patterns induced by the day of the week (see variables $test \: rate_{ij}$ and $weekend_i$). Similarly, we adjusted for county-level effects with the term $\gamma_{0j}$, which represents the random intercept for county $j$. We fit each model using a first-order autoregressive covariance structure with homogeneous variances to account for the time series nature of our data.
+
+**Lag: 08 days**
+```{r,results='hide',warning=FALSE}
+# Model: Case Growth Rate ~ Delta Transaction Rate (Lag 08 days)
+model_8days <- lme(case_growth_rate ~ delta_trans_lag8 + test_rate + weekend,
+               random = ~1 |state,
+             correlation = corAR1(form = ~date),
+             data = data_emergency)
+```
+
+```{r,results='hide',warning=FALSE}
+# Model summary
+summary(model_8days)
+```
+
+```{r}
+# Model output
+tidy(model_8days,effects = 'fixed',conf.int = TRUE)
+```
+
+```{r}
+# Random Coefficients
+coef(model_8days)
+```
+
+**Lag: 10 days**
+```{r,results='hide',warning=FALSE}
+# Model: Case Growth Rate ~ Delta Transaction Rate (Lag 10 days)
+model_10days <- lme(case_growth_rate ~ delta_trans_lag10 + test_rate + weekend,
+               random = ~1 |state,
+             correlation = corAR1(form = ~date),
+             data = data_emergency)
+```
+
+```{r,results='hide',warning=FALSE}
+# Model summary
+summary(model_10days)
+```
+
+```{r}
+# Model output
+tidy(model_10days,effects = 'fixed',conf.int = TRUE)
+```
+
+```{r}
+# Random Coefficients
+coef(model_10days)
+```
+
+**Lag: 12 days**
+```{r,results='hide',warning=FALSE}
+# Model: Case Growth Rate ~ Delta Transaction Rate (Lag 12 days)
+model_12days <- lme(case_growth_rate ~ delta_trans_lag12 + test_rate + weekend,
+               random = ~1 |state,
+             correlation = corAR1(form = ~date),
+             data = data_emergency)
+```
+
+```{r,results='hide',warning=FALSE}
+# Model summary
+summary(model_12days)
+```
+
+```{r}
+# Model output
+tidy(model_12days,effects = 'fixed',conf.int = TRUE)
+```
+
+```{r}
+# Random Coefficients
+coef(model_12days)
+```
+
+**Lag: 14 days**
+```{r,results='hide',warning=FALSE}
+# Model: Case Growth Rate ~ Delta Transaction Rate (Lag 14 days)
+model_14days <- lme(case_growth_rate ~ delta_trans_lag8 + test_rate + weekend,
+               random = ~1 |state,
+             correlation = corAR1(form = ~date),
+             data = data_emergency)
+```
+
+```{r,results='hide',warning=FALSE}
+# Model summary
+summary(model_14days)
+```
+
+```{r}
+# Model output
+tidy(model_14days,effects = 'fixed',conf.int = TRUE)
+```
+
+```{r}
+# Random Coefficients
+coef(model_14days)
+```

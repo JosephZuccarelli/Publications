@@ -1,0 +1,331 @@
+---
+title: "Assessing the Impact of NPIs on Consumer Mobility Patterns and COVID-19 Transmission in the US"
+author: "Joseph Zuccarelli, Laura Seaman, Kevin Rader"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+
+---
+
+```{r setup, include=FALSE}
+# Define necessary libraries
+library(tidyr)
+library(lubridate)
+library(table1)
+library(knitr)
+library(dplyr)
+library(lme4)
+library(ggplot2)
+library(cowplot)
+library(scales)
+library(reshape2)
+library(broom.mixed)
+library(zoo)
+library(afex)
+library(iccCounts)
+library(glmmTMB)
+library(performance)
+```
+
+In the following markdown document, we carry out all mobility modeling using generalized linear mixed effects models. 
+
+## Mobility Modeling
+
+First, we must read in our two datasets.
+```{r}
+# Read in data sets
+MA_data <- read.csv("/Users/jqz0816/Documents/MDPI/Data/MA_data.csv")
+MI_data <- read.csv("/Users/jqz0816/Documents/MDPI/Data/MI_data.csv")
+
+# Format date/indicator features properly
+MI_data$date <- as.Date(MI_data$date)
+MA_data$date <- as.Date(MA_data$date)
+MI_data$date_factor <- as.factor(MI_data$date)
+MA_data$date_factor <- as.factor(MA_data$date)
+MA_data$work_closing <- as.factor(MA_data$work_closing)
+MA_data$gather_restrict <- as.factor(MA_data$gather_restrict)
+MA_data$stay_home_reqs <- as.factor(MA_data$stay_home_reqs)
+MI_data$work_closing <- as.factor(MI_data$work_closing)
+MI_data$gather_restrict <- as.factor(MI_data$gather_restrict)
+MI_data$stay_home_reqs <- as.factor(MI_data$stay_home_reqs)
+```
+
+Prior to performing any modeling, it is necessary to visualize the distributions of our variables.
+```{r fig.align="center",warning=FALSE}
+# Histogram: Daily Transactions Count (MA Jan - May 2020)
+MA_plot <- MA_data %>%
+  ggplot(aes(x=num_transactions)) +
+  geom_histogram()+
+  labs(x="Number of Daily Transactions",y="Count",title="Daily Transactions Count (MA)") 
+
+# Histogram: Daily Transactions Count (MI Jan - May 2020)
+MI_plot <- MA_data %>%
+  ggplot(aes(x=num_transactions)) +
+  geom_histogram()+
+  labs(x="Number of Daily Transactions",y="Count",title="Daily Transactions Count (MI)") 
+
+# Subplots
+plot_grid(MA_plot,MI_plot)
+```
+The plots above indicate that our data is heavily right-skewed; therefore, Poisson models are most appropriate. We will also check for over-dispersion, in which case negative binomial models would be necessary. Formally, our consumer mobility models are defined as follows:
+
+\begin{equation} 
+  \log(transactions_{ij})  = \beta_0 + \beta NPI_{i} + \beta weekend_{i} + \gamma_{0j}. 
+\end{equation}
+
+The response variable, $transactions_{ij}$, denotes the POS transaction count observed on date $i$ for individual $j$. The indicator variable, $NPI_{i}$, represents one of the four interventions of interest in our study. Note that we treated each NPI as a categorical variable with multiple levels; therefore, fitting each separate model with four different NPI variables resulted in multiple $\beta$ coefficients due to one hot encoding. We controlled for seasonal patterns induced by the day of the week with the variable $weekend_{i}$. Similarly, we adjusted for individual-level effects with the term $\gamma_{0j}$, which represents the random intercept for individual $j$. We fit each model using a first-order autoregressive covariance structure with homogeneous variances to account for the time series nature of our data. 
+
+**Massachusetts**
+
+**NPI: National Emergency**
+```{r,results='hide',warning=FALSE}
+# Model: Daily Number of Transactions ~ National Emergency (MA)
+modelMA <- glmmTMB(num_transactions ~ emergency + weekend +  (1|uuid) +
+                  + ar1(date_factor + 0 |uuid),
+                   family = poisson(),
+                   data=MA_data)
+```
+
+```{r}
+# Overdispersion test
+check_overdispersion(modelMA)
+```
+
+```{r}
+# Model summary
+summary(modelMA)
+```
+
+```{r}
+# Fixed Effects
+tidy(modelMA,exponentiate = TRUE,effects = 'fixed',conf.int = TRUE)
+```
+
+```{r}
+# ICC
+rand_model <- icc_counts(MA_data,y='num_transactions',id='uuid',fam="poisson")
+rand_model$ICC
+```
+
+**NPI: Workplace Closing**
+```{r,results='hide',warning=FALSE}
+# Model: Daily Number of Transactions ~ Workplace Closing (MA)
+modelMA <- glmmTMB(num_transactions ~ work_closing + weekend + (1 | uuid) +
+                   ar1(date_factor + 0 |uuid),
+                   family = poisson(),
+                   data=MA_data)
+```
+
+```{r}
+# Overdispersion test
+check_overdispersion(modelMA)
+```
+
+```{r}
+# Model summary
+summary(modelMA)
+```
+
+```{r}
+# Model output
+tidy(modelMA,exponentiate = TRUE,effects = 'fixed',conf.int = TRUE)
+```
+
+```{r}
+# ICC
+rand_model <- icc_counts(MA_data,y='num_transactions',id='uuid',fam="poisson")
+rand_model$ICC
+```
+
+**NPI: Stay-at-Home Requirements**
+```{r,results='hide',warning=FALSE}
+# Model: Daily Number of Transactions ~ Stay-at-Home Requirements (MA)
+modelMA <- glmmTMB(num_transactions ~ stay_home_reqs + weekend + (1 |uuid) +
+                   ar1(date_factor + 0 |uuid),
+                   family = poisson(),
+                   data=MA_data)
+```
+
+```{r}
+# Overdispersion test
+check_overdispersion(modelMA)
+```
+
+```{r}
+# Model summary
+summary(modelMA)
+```
+
+```{r}
+# Model output
+tidy(modelMA,exponentiate = TRUE,effects = 'fixed',conf.int = TRUE)
+```
+
+```{r}
+# ICC
+rand_model <- icc_counts(MA_data,y='num_transactions',id='uuid',fam="poisson")
+rand_model$ICC
+```
+
+**NPI: Gathering Restrictions**
+```{r,results='hide',warning=FALSE}
+# Model: Daily Number of Transactions ~ Gathering Restrictions (MA)
+modelMA <- glmmTMB(num_transactions ~ gather_restrict + weekend + (1|uuid) +
+                   ar1(date_factor + 0 |uuid),
+                   family = poisson(),
+                   data=MA_data)
+```
+
+```{r}
+# Overdispersion test
+check_overdispersion(modelMA)
+```
+
+```{r}
+# Model summary
+summary(modelMA)
+```
+
+```{r}
+# Model output
+tidy(modelMA,exponentiate = TRUE,effects = 'fixed',conf.int = TRUE)
+```
+
+```{r}
+# ICC
+rand_model <- icc_counts(MA_data,y='num_transactions',id='uuid',fam="poisson")
+rand_model$ICC
+```
+
+**Michigan**
+
+**NPI: National Emergency**
+```{r,results='hide',warning=FALSE}
+# Model: Daily Number of Transactions ~ National Emergency (MI)
+modelMI <- glmmTMB(num_transactions ~ emergency + weekend + (1|uuid) +
+                  + ar1(date_factor + 0 |uuid),
+                   family = poisson(),
+                   data=MI_data)
+```
+
+```{r}
+# Overdispersion test
+check_overdispersion(modelMI)
+```
+
+```{r}
+# Model summary
+summary(modelMI)
+```
+
+```{r}
+# Model output
+tidy(modelMI,exponentiate = TRUE,effects = 'fixed',conf.int = TRUE)
+```
+
+```{r}
+# ICC
+rand_model <- icc_counts(MI_data,y='num_transactions',id='uuid',fam="poisson")
+rand_model$ICC
+```
+
+**NPI: Workplace Closing**
+```{r,results='hide',warning=FALSE}
+# Model: Daily Number of Transactions ~ Workplace Closing (MI)
+modelMI <- glmmTMB(num_transactions ~ work_closing + weekend + (1 |uuid) +
+                   ar1(date_factor + 0 |uuid),
+                   family = poisson(),
+                   data=MI_data)
+```
+
+```{r}
+# Overdispersion test
+check_overdispersion(modelMI)
+```
+
+```{r}
+# Model summary
+summary(modelMI)
+```
+
+```{r}
+# Model output
+tidy(modelMI,exponentiate = TRUE,effects = 'fixed',conf.int = TRUE)
+```
+
+```{r}
+# ICC
+rand_model <- icc_counts(MI_data,y='num_transactions',id='uuid',fam="poisson")
+rand_model$ICC
+```
+
+**NPI: Stay-at-Home Requirements**
+```{r,results='hide',warning=FALSE}
+# Model: Daily Number of Transactions ~ Stay-at-Home Requirements (MI)
+modelMI <- glmmTMB(num_transactions ~ stay_home_reqs + weekend + (1 |uuid) +
+                   ar1(date_factor + 0 |uuid),
+                   family = poisson(),
+                   data=MI_data)
+```
+
+```{r}
+# Overdispersion test
+check_overdispersion(modelMI)
+```
+
+```{r}
+# Model summary
+summary(modelMI)
+```
+
+```{r}
+# Model output
+tidy(modelMI,exponentiate = TRUE,effects = 'fixed',conf.int = TRUE)
+```
+
+```{r}
+# ICC
+rand_model <- icc_counts(MI_data,y='num_transactions',id='uuid',fam="poisson")
+rand_model$ICC
+```
+
+**NPI: Gathering Restrictions**
+```{r,results='hide',warning=FALSE}
+# Model: Daily Number of Transactions ~ Gathering Restrictions (MI)
+modelMI <- glmmTMB(num_transactions ~ gather_restrict + weekend + (1|uuid) +
+                   ar1(date_factor + 0 |uuid),
+                   family = poisson(),
+                   data=MI_data)
+```
+
+```{r}
+# Overdispersion test
+check_overdispersion(modelMI)
+```
+
+```{r}
+# Model summary
+summary(modelMI)
+```
+
+```{r}
+# Model output
+tidy(modelMI,exponentiate = TRUE,effects = 'fixed',conf.int = TRUE)
+```
+
+```{r}
+# ICC
+rand_model <- icc_counts(MI_data,y='num_transactions',id='uuid',fam="poisson")
+rand_model$ICC
+```
+
+
+
+
+
+
+
+
+
+
+
